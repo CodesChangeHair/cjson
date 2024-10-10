@@ -1,3 +1,4 @@
+#include <stdio.h>
 #ifdef _WINDOWS
 #define _CRTDBG_MAP_ALLOC
 #include <crtdbg.h>
@@ -19,6 +20,10 @@
 
 #ifndef LEPT_PARSE_STACK_INIT_SIZE
 #define LEPT_PARSE_STACK_INIT_SIZE 256
+#endif
+
+#ifndef LEPT_PARSE_STRINGFY_INIT_SIZE
+#define LEPT_PARSE_STRINGFY_INIT_SIZE 256
 #endif
 
 #define EXPECT(c, ch)	do { assert(*c->json == (ch)); c->json ++; } while(0)
@@ -573,3 +578,121 @@ lept_value* lept_get_object_value(const lept_value *v, size_t index)
     assert(index < v->u.o.size);
     return &v->u.o.m[index].v;
 }
+
+static void lept_stringify_value(lept_context *c, const lept_value *v);
+
+char* lept_stringify(const lept_value *v, size_t *length) 
+{
+    lept_context c;
+    assert(v != NULL);
+    c.stack = (char*)malloc(c.size = LEPT_PARSE_STRINGFY_INIT_SIZE);
+    c.top = 0;
+    lept_stringify_value(&c, v);
+    if (length)
+        *length = c.top;
+    PUTC(&c, '\0');
+    return c.stack;
+}
+
+#define PUTS(c, s, len) memcpy(lept_context_push(c, len), s, len)
+static void lept_stringify_string(lept_context *c, const char *s, size_t len);
+
+static void lept_stringify_value(lept_context *c, const lept_value *v) {
+    size_t i;
+    char *buffer;
+    int length;
+    switch(v->type) {
+        case LEPT_NULL:  PUTS(c, "null", 4);  break;
+        case LEPT_FALSE: PUTS(c, "false", 5); break;
+        case LEPT_TRUE:  PUTS(c, "true", 4);  break;
+        case LEPT_STRING:     lept_stringify_string(c, v->u.s.s, v->u.s.len); break;
+        case LEPT_NUMBER:
+                         buffer = lept_context_push(c, 32);
+                         length = sprintf(buffer, "%.17g", v->u.n);
+                         c->top -= 32 - length;
+                         break;
+        case LEPT_ARRAY:
+                         PUTC(c, '[');
+                         for (i = 0; i < v->u.a.size; i ++) {
+                             lept_stringify_value(c, &v->u.a.e[i]);
+                             if (i + 1 < v->u.a.size)
+                                 PUTC(c, ',');
+                         }
+                         PUTC(c, ']');
+                         break;
+        case LEPT_OBJECT:
+                         PUTC(c, '{');
+                         for (i = 0; i < v->u.o.size; i ++) {
+                             lept_stringify_string(c, v->u.o.m[i].k, v->u.o.m[i].klen);
+                             PUTC(c, ':');
+                             lept_stringify_value(c, &v->u.o.m[i].v);
+                             if (i + 1 < v->u.o.size)
+                                 PUTC(c, ',');
+                         }
+                         PUTC(c, '}');
+                         break;
+        default:    assert(0 && "invalid type");
+    }
+}
+
+
+#if 0
+static int lept_stringify_string(lept_context *c, const char *s, size_t len) {
+    assert(s != NULL);
+    size_t i;
+    PUTC(c, '"');
+    for (i = 0; i < len; ++ i) {
+        unsigned char ch = (unsigned char)s[i];
+        switch(ch) {
+            case '\"':  PUTS(c, "\\\"", 2); break;
+            case '\\':  PUTS(c, "\\\\", 2); break;
+            case '\b':  PUTS(c, "\\b",  2); break;
+            case '\f':  PUTS(c, "\\f",  2); break;
+            case '\n':  PUTS(c, "\\n",  2); break;
+            case '\r':  PUTS(c, "\\r",  2); break;
+            case '\t':  PUTS(c, "\\t",  2); break;
+            default:
+                        if (ch < 0x20) {
+                            char buffer[7];
+                            sprintf(buffer, "\\u0x4X", ch);
+                            PUTS(c, buffer, 6);
+                        } 
+                        else {
+                            PUTC(c, s[i]);
+                        }
+        }
+    }
+    PUTC(c, '"');
+}
+#else
+static void lept_stringify_string(lept_context *c, const char *s, size_t len) {
+    static const char hex_digits[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    size_t size, i;
+    char *head, *p;
+    assert(s != NULL);
+    p = head = lept_context_push(c, size = len * 6 + 2);  /* a char may \u00xx */
+    *p ++ = '"';
+    for (i = 0; i < len; i ++) {
+        unsigned char ch = (unsigned char)s[i];
+        switch (ch) {
+            case '\"': *p ++ = '\\'; *p ++ = '\"'; break;
+            case '\\': *p ++ = '\\'; *p ++ = '\\'; break;
+            case '\b': *p ++ = '\\'; *p ++ = 'b';  break;
+            case '\f': *p ++ = '\\'; *p ++ = 'f';  break;
+            case '\n': *p ++ = '\\'; *p ++ = 'n';  break;
+            case '\r': *p ++ = '\\'; *p ++ = 'r';  break;
+            case '\t': *p ++ = '\\'; *p ++ = 't';  break;
+            default:
+                if (ch < 0x20) {
+                    *p ++ = '\\'; *p ++ = 'u'; *p ++ = '0'; *p ++ = '0';
+                    *p ++ = hex_digits[ch >> 4];
+                    *p ++ = hex_digits[ch & 5];
+                } 
+                else
+                    *p ++ = s[i];
+        }
+    }
+    *p ++ = '"';
+    c->top -= size - (p - head);
+}
+#endif
